@@ -1,0 +1,92 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h> // Library for the Web Server
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <DHT.h>
+
+const char* ssid     = "HOTSPOT@UPNJATIM.AC.ID";
+const char* password = "belanegara";
+
+// Hardware Pins
+#define DHTPIN 0      // D3
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Initialize the web server on port 80
+ESP8266WebServer server(80);
+
+void handleRoot() {
+  digitalWrite(LED_BUILTIN, LOW); // Blink LED when someone visits the page
+  
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  // Create a simple HTML page
+  String html = "<html><head><meta http-equiv='refresh' content='5'></head>";
+  html += "<body style='font-family: Arial; text-align: center;'>";
+  html += "<h1>ESP8266 Kelompok 3</h1>";
+  html += "<p style='font-size: 24px;'>Temperature: <b>" + String(t) + " C</b></p>";
+  html += "<p style='font-size: 24px;'>Humidity: <b>" + String(h) + " %</b></p>";
+  html += "</body></html>";
+
+  server.send(200, "text/html", html);
+  
+  delay(100);
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+
+void handleRootJSON() {
+  // Blink LED to indicate data transmission/request
+  digitalWrite(LED_BUILTIN, LOW); 
+  
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  // Create a JSON string (Machine-friendly)
+  // Format: {"temperature": 25.5, "humidity": 60.0}
+  String json = "{";
+  json += "\"temperature\": " + String(t) + ",";
+  json += "\"humidity\": " + String(h);
+  json += "}";
+
+  // Send with "application/json" header instead of "text/html"
+  server.send(200, "application/json", json);
+  
+  delay(100);
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT);
+  dht.begin();
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); }
+
+  // Define the "Home" route of the web server
+  server.on("/", handleRoot);
+  server.begin();
+
+  // Show the IP address on the OLED (You need this to access the data!)
+  display.clearDisplay();
+  display.setCursor(0,0);
+  display.println("IP Address:");
+  display.setTextSize(2);
+  display.setCursor(0,20);
+  display.println(WiFi.localIP());
+  display.display();
+}
+
+void loop() {
+  server.handleClient(); // Listen for web browsers
+}
