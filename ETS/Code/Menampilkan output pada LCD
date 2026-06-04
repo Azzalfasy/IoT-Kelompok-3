@@ -1,0 +1,199 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <BH1750.h>
+#include <DHT.h>
+
+// --- Inisialisasi LCD & Sensor I2C ---
+LiquidCrystal_I2C lcd(0x27, 16, 2); 
+BH1750 lightMeter;
+
+// --- Inisialisasi Sensor Suara (Murni Analog) ---
+const int pinAnalog = 34; 
+
+// --- Inisialisasi DHT22 ---
+#define DHTPIN 4        
+#define DHTTYPE DHT22   
+DHT dht(DHTPIN, DHTTYPE);
+
+// --- Variabel untuk Manajemen Waktu (Millis) ---
+unsigned long waktuTerakhirLCD = 0;
+const long jedaHalaman = 3000; // Layar berganti setiap 3 detik (3000 ms)
+int halamanSekarang = 1;       
+
+// --- Variabel Pendeteksi Suara (Metode Peak-to-Peak) ---
+int nilaiMaksimal = 0;
+int nilaiMinimal = 4095;
+
+// --- Variabel Deteksi Otomatis Sensor Cahaya ---
+bool bh1750Ready = false; 
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(); 
+
+  // Setup Layar
+  lcd.init();
+  lcd.backlight();
+  
+  // Setup Sensor DHT22
+  dht.begin();
+  
+  // Setup Sensor BH1750 secara aman (tidak mengunci sistem jika gagal)
+  if (lightMeter.begin()) {
+    Serial.println("STATUS: BH1750 Terdeteksi!");
+    bh1750Ready = true;
+  } else {
+    Serial.println("STATUS: BH1750 Tidak Ditemukan! Berjalan dalam Mode Aman.");
+    bh1750Ready = false;
+  }
+
+  lcd.setCursor(0, 0);
+  lcd.print("Memulai Sistem..");
+  delay(2000); 
+  lcd.clear();
+}
+
+void loop() {
+  // ===================================================
+  // 1. PROSES RONDA SUARA REAL-TIME (Mencari Nilai Ekstrem)
+  // ===================================================
+  int nilaiSuaraSaatIni = analogRead(pinAnalog);
+
+  // Cari nilai tertinggi dan terendah dari gelombang suara selama 3 detik ini
+  if (nilaiSuaraSaatIni > nilaiMaksimal) {
+    nilaiMaksimal = nilaiSuaraSaatIni;
+  }
+  if (nilaiSuaraSaatIni < nilaiMinimal) {
+    nilaiMinimal = nilaiSuaraSaatIni;
+  }
+
+  // ===================================================
+  // 2. MANAJEMEN WAKTU LCD (DIEKSEKUSI TIAP 3 DETIK)
+  // ===================================================
+  unsigned long waktuSekarang = millis();
+
+  if (waktuSekarang - waktuTerakhirLCD >= jedaHalaman) {
+    waktuTerakhirLCD = waktuSekarang; // Reset Jam
+
+    // Hitung seberapa keras suara (Selisih Puncak Atas & Puncak Bawah Gelombang)
+    int kenyaringanSuara = nilaiMaksimal - nilaiMinimal;
+
+    // Coba deteksi ulang sensor BH1750 (Hot-Plug: Bisa dicolok menyusul saat alat hidup)
+    if (!bh1750Ready) {
+      bh1750Ready = lightMeter.begin(); 
+    }
+
+    // Ambil data sensor cahaya secara kondisional
+    float lux = -1.0; 
+    if (bh1750Ready) {
+      lux = lightMeter.readLightLevel();
+      // Jika mendadak dicabut di tengah jalan, set kembali ke mode error
+      if (lux < 0) {
+        bh1750Ready = false; 
+      }
+    }
+
+    // Ambil data sensor DHT22
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+
+    // Cek Error DHT22 (Menggunakan lcd.print biar tidak macet blank putih)
+    bool dhtError = (isnan(t) || isnan(h));
+
+    // --- HALAMAN 1: CAHAYA & SUARA ---
+    if (halamanSekarang == 1) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      
+      // Output khusus jika sensor cahaya absen/rusak
+      if (!bh1750Ready) {
+        lcd.print("Cahaya: No Sensor"); 
+      } else {
+        lcd.print("Cahaya: "); lcd.print((int)lux); lcd.print(" lx");
+      }
+      
+      lcd.setCursor(0, 1);
+      if (kenyaringanSuara > 1200) {
+        lcd.print("Suara: BISING!");
+      } else {
+        lcd.print("Suara: TENANG");
+      }
+      halamanSekarang = 2; 
+    } 
+    // --- HALAMAN 2: SUHU & KELEMBAPAN ---
+    else if (halamanSekarang == 2) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Suhu: "); 
+      if (dhtError) lcd.print("Error"); else { lcd.print(t, 1); lcd.print(" C"); }
+      
+      lcd.setCursor(0, 1);
+      lcd.print("Lembap: "); 
+      if (dhtError) lcd.print("Error"); else { lcd.print(h, 1); lcd.print(" %"); }
+      halamanSekarang = 3; 
+    } 
+    // --- HALAMAN 3: STATUS KENYAMANAN ---
+    else if (halamanSekarang == 3) {
+      lcd.clear();
+      int skorSuhu = 0;
+      int skorLembap = 0;
+      int skorCahaya = 0;
+      int skorSuara = 0;
+
+      // A. Hitung Skor Suhu
+      if (dhtError)                   skorSuhu = 5;
+      else if (t >= 18.0 && t < 24.0) skorSuhu = 25; ]
+      else if (t >= 24.0 && t < 29.0) skorSuhu = 15; 
+      else                            skorSuhu = 5;  
+
+      // B. Hitung Skor Kelembapan
+      if (dhtError)                                                skorLembap = 5;
+      else if (h >= 45.0 && h <= 65.0)                             skorLembap = 25; 
+      else if ((h >= 35.0 && h < 45.0) || (h > 65.0 && h <= 77.0)) skorLembap = 15; 
+      else                                                         skorLembap = 5;  
+
+      // C. Hitung Skor Cahaya (Kondisional)
+      if (!bh1750Ready) {
+        skorCahaya = 25; // Kompensasi: Set skor ideal otomatis agar tidak merusak keputusan total saat sensor hilang
+      } else {
+        if (lux <= 5.0)                  skorCahaya = 25; // Ideal
+        else if (lux > 5.0 && lux < 20.0) skorCahaya = 15; // Toleransi
+        else                            skorCahaya = 5;  // Ekstrem
+      }
+
+      // D. Hitung Skor Suara 
+      bool isBerisik = (kenyaringanSuara > 500);
+      if (isBerisik)                  skorSuara = 0;  // Berisik
+      else                            skorSuara = 25; // Tenang
+
+      // Hitung Total Skor Internal
+      int totalSkor = skorSuhu + skorLembap + skorCahaya + skorSuara;
+
+      // Tentukan Output Kenyamanan di LCD
+      if (totalSkor >= 85) {
+        lcd.setCursor(0, 0); lcd.print("Sangat Nyaman");
+        lcd.setCursor(0, 1); lcd.print("Kamar Sempurna:)");
+      } 
+      else if (totalSkor >= 60) {
+        lcd.setCursor(0, 0); lcd.print("Cukup Nyaman");
+        lcd.setCursor(0, 1); lcd.print("Kamar Agak Pas");
+      } 
+      else {
+        lcd.setCursor(0, 0); lcd.print("Tidak Nyaman!");
+        lcd.setCursor(0, 1);
+        if (isBerisik)                lcd.print("Terlalu Bising");
+        else if (bh1750Ready && skorCahaya == 5) lcd.print("Terlalu Terang");
+        else if (!dhtError && t >= 29.0) lcd.print("Terlalu Panas");
+        else if (!dhtError && t < 18.0)  lcd.print("Kedinginan");
+        else if (!dhtError && h > 77.0)  lcd.print("Terlalu Lembab");
+        else if (!dhtError && h < 35.0)  lcd.print("Terlalu Kering");
+        else                             lcd.print("DHT22 Error");
+      }
+
+      // --- RESET VARIABEL UNTUK SIKLUS 3 DETIK BERIKUTNYA ---
+      nilaiMaksimal = 0;
+      nilaiMinimal = 4095;
+      halamanSekarang = 1; 
+    }
+  }
+}
