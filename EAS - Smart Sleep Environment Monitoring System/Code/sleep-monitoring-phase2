@@ -1,0 +1,120 @@
+#include <Wire.h>
+#include <BH1750.h>
+#include <DHT.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+// ==========================================
+// KONFIGURASI WI-FI & SERVER FLASK
+// ==========================================
+const char* ssid     = "stbv09";      
+const char* password = "wowwwwww";  
+const char* serverUrl = "http://10.39.17.220:5000/api/data"; 
+
+BH1750 lightMeter;
+const int pinAnalog = 34; 
+
+#define DHTPIN 4        
+#define DHTTYPE DHT22   
+DHT dht(DHTPIN, DHTTYPE);
+
+unsigned long waktuTerakhirAmbilData = 0;
+const long jedaSiklus = 5000; 
+
+int nilaiMaksimal = 0;
+int nilaiMinimal = 4095;
+bool bh1750Ready = false; 
+const int batasSuaraBerisik = 1200; 
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(); 
+  dht.begin();
+  
+  WiFi.begin(ssid, password);
+  Serial.print("Menghubungkan ke Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n[WI-FI] Terhubung!");
+
+  if (lightMeter.begin()) { bh1750Ready = true; }
+}
+
+void loop() {
+  int nilaiSuaraSaatIni = analogRead(pinAnalog);
+  if (nilaiSuaraSaatIni > nilaiMaksimal) nilaiMaksimal = nilaiSuaraSaatIni;
+  if (nilaiSuaraSaatIni < nilaiMinimal)  nilaiMinimal = nilaiSuaraSaatIni;
+
+  unsigned long waktuSekarang = millis();
+  if (waktuSekarang - waktuTerakhirAmbilData >= jedaSiklus) {
+    waktuTerakhirAmbilData = waktuSekarang; 
+
+    int kenyaringanSuara = nilaiMaksimal - nilaiMinimal;
+    bool isBerisik = (kenyaringanSuara > batasSuaraBerisik);
+    String strSuara = isBerisik ? "BISING" : "TENANG";
+
+    if (!bh1750Ready) bh1750Ready = lightMeter.begin(); 
+    float lux = bh1750Ready ? lightMeter.readLightLevel() : 0.0;
+    if (lux < 0) lux = 0.0;
+
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    bool dhtError = (isnan(t) || isnan(h));
+
+    // RESET WADAH RONDA SUARA
+    nilaiMaksimal = 0;
+    nilaiMinimal = 4095;
+
+    // AMBIL NILAI UNTUK PAYLOAD JIKA ERROR
+    float sendT = dhtError ? 0.0 : t;
+    float sendH = dhtError ? 0.0 : h;
+
+    // LOGIKA SKORING & KEPUTUSAN STATUS
+    int skorSuhu = 0, skorLembap = 0, skorCahaya = 0, skorSuara = 0;
+    if (dhtError)                   skorSuhu = 5;
+    else if (t >= 18.0 && t < 24.0) skorSuhu = 25; 
+    else if (t >= 24.0 && t < 29.0) skorSuhu = 15; 
+    else                            skorSuhu = 5;  
+
+    if (dhtError)                    skorLembap = 5;
+    else if (h >= 45.0 && h <= 65.0) skorLembap = 25; 
+    else                             skorLembap = 15;  
+
+    if (!bh1750Ready)                skorCahaya = 25; 
+    else if (lux <= 5.0)             skorCahaya = 25; 
+    else if (lux < 20.0)             skorCahaya = 15; 
+    else                             skorCahaya = 5;  
+
+    skorSuara = isBerisik ? 0 : 25; 
+    int totalSkor = skorSuhu + skorLembap + skorCahaya + skorSuara;
+
+    String statusKenyamanan = "";
+    if (totalSkor >= 80)      statusKenyamanan = "RUANGAN SANGAT NYAMAN";
+    else if (totalSkor >= 60) statusKenyamanan = "RUANGAN CUKUP NYAMAN";
+    else                      statusKenyamanan = "RUANGAN TIDAK NYAMAN!";
+
+    // ==========================================
+    // PROSES PENGIRIMAN PAYLOAD DATA LENGKAP
+    // ==========================================
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
+      http.begin(serverUrl);
+      http.addHeader("Content-Type", "application/json");
+
+      // Bikin Payload JSON Terstruktur
+      String jsonPayload = "{";
+      jsonPayload += "\"suhu\":" + String(sendT, 1) + ",";
+      jsonPayload += "\"kelembapan\":" + String(sendH, 1) + ",";
+      jsonPayload += "\"cahaya\":" + String(lux, 0) + ",";
+      jsonPayload += "\"suara\":\"" + strSuara + "\",";
+      jsonPayload += "\"total_skor\":" + String(totalSkor) + ",";
+      jsonPayload += "\"status\":\"" + statusKenyamanan + "\"";
+      jsonPayload += "}";
+      
+      int httpResponseCode = http.POST(jsonPayload);
+      http.end();
+    }
+  }
+}
