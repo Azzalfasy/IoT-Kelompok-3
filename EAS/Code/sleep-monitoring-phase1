@@ -1,0 +1,170 @@
+#include <Wire.h>
+#include <BH1750.h>
+#include <DHT.h>
+
+BH1750 lightMeter;
+const int pinAnalog = 34; 
+
+#define DHTPIN 4        
+#define DHTTYPE DHT22   
+DHT dht(DHTPIN, DHTTYPE);
+
+// --- Manajemen Waktu Dipercepat Menjadi 5 Detik (5000 ms) ---
+unsigned long waktuTerakhirAmbilData = 0;
+const long jedaSiklus = 5000; 
+
+// --- Variabel Pendeteksi Suara ---
+int nilaiMaksimal = 0;
+int nilaiMinimal = 4095;
+bool bh1750Ready = false; 
+const int batasSuaraBerisik = 1200; 
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(); 
+  dht.begin();
+  
+  Serial.println("\n=========================================");
+  Serial.println("  SISTEM MONITORING KAMAR TIDUR (TAHAP 1) ");
+  Serial.println("=========================================");
+  
+  // Setup Sensor BH1750 secara aman
+  if (lightMeter.begin()) {
+    Serial.println("STATUS SENSOR: BH1750 [OK]");
+    bh1750Ready = true;
+  } else {
+    Serial.println("STATUS SENSOR: BH1750 [TIDAK TERDETEKSI] - Mode Aman Aktif");
+    bh1750Ready = false;
+  }
+  Serial.println("STATUS SENSOR: DHT22 [OK]");
+  Serial.println("Sistem mulai meronda sensor... Tunggu 5 detik.\n");
+}
+
+void loop() {
+  // ===================================================
+  // 1. PROSES RONDA SUARA REAL-TIME (Dijalankan Terus Menerus)
+  // ===================================================
+  int nilaiSuaraSaatIni = analogRead(pinAnalog);
+
+  if (nilaiSuaraSaatIni > nilaiMaksimal) {
+    nilaiMaksimal = nilaiSuaraSaatIni;
+  }
+  if (nilaiSuaraSaatIni < nilaiMinimal) {
+    nilaiMinimal = nilaiSuaraSaatIni;
+  }
+
+  // ===================================================
+  // 2. EKSEKUSI DATA & KEPUTUSAN (TIAP 5 DETIK SEKALI)
+  // ===================================================
+  unsigned long waktuSekarang = millis();
+
+  if (waktuSekarang - waktuTerakhirAmbilData >= jedaSiklus) {
+    waktuTerakhirAmbilData = waktuSekarang; // Reset Jam Internal
+
+    // A. Ambil Data Snapshot Suara
+    int kenyaringanSuara = nilaiMaksimal - nilaiMinimal;
+    bool isBerisik = (kenyaringanSuara > batasSuaraBerisik);
+
+    // B. Ambil Data Snapshot Cahaya
+    if (!bh1750Ready) {
+      bh1750Ready = lightMeter.begin(); // Coba hot-plug reconnect
+    }
+    
+    float lux = 0;
+    if (bh1750Ready) {
+      lux = lightMeter.readLightLevel();
+      if (lux < 0) {
+        bh1750Ready = false;
+        lux = 0;
+      }
+    }
+
+    // C. Ambil Data Snapshot DHT22
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    bool dhtError = (isnan(t) || isnan(h));
+
+    // LANGSUNG RESET WADAH RONDA SUARA UNTUK SIKLUS 5 DETIK BERIKUTNYA
+    nilaiMaksimal = 0;
+    nilaiMinimal = 4095;
+
+    // ===================================================
+    // 3. LOGIKA SKORING & KEPUTUSAN KENYAMANAN
+    // ===================================================
+    int skorSuhu = 0, skorLembap = 0, skorCahaya = 0, skorSuara = 0;
+
+    // Hitung Skor Suhu
+    if (dhtError)                   skorSuhu = 5;
+    else if (t >= 18.0 && t < 24.0) skorSuhu = 25; 
+    else if (t >= 24.0 && t < 29.0) skorSuhu = 15; 
+    else                            skorSuhu = 5;  
+
+    // Hitung Skor Kelembapan
+    if (dhtError)                                                skorLembap = 5;
+    else if (h >= 45.0 && h <= 65.0)                             skorLembap = 25; 
+    else if ((h >= 35.0 && h < 45.0) || (h > 65.0 && h <= 77.0)) skorLembap = 15; 
+    else                                                         skorLembap = 5;  
+
+    // Hitung Skor Cahaya
+    if (!bh1750Ready) {
+      skorCahaya = 25; // Kompensasi ideal jika sensor kendor/absen
+    } else {
+      if (lux <= 5.0)                  skorCahaya = 25; 
+      else if (lux > 5.0 && lux < 20.0) skorCahaya = 15; 
+      else                            skorCahaya = 5;  
+    }
+
+    // Hitung Skor Suara
+    if (isBerisik) skorSuara = 0; else skorSuara = 25; 
+
+    // Akumulasi Total Skor
+    int totalSkor = skorSuhu + skorLembap + skorCahaya + skorSuara;
+
+    String statusKenyamanan = "";
+    String alasan = "-";
+
+    if (totalSkor >= 80) {
+      statusKenyamanan = "RUANGAN SANGAT NYAMAN";
+    } 
+    else if (totalSkor >= 60) {
+      statusKenyamanan = "RUANGAN CUKUP NYAMAN";
+    } 
+    else {
+      statusKenyamanan = "RUANGAN TIDAK NYAMAN!";
+      // Cari alasan utama
+      if (isBerisik)                  alasan = "Terlalu Bising";
+      else if (bh1750Ready && lux >= 20.0) alasan = "Terlalu Terang";
+      else if (!dhtError && t >= 29.0)     alasan = "Terlalu Panas";
+      else if (!dhtError && t < 18.0)      alasan = "Kedinginan";
+      else if (!dhtError && h > 77.0)      alasan = "Terlalu Lembab";
+      else if (!dhtError && h < 35.0)      alasan = "Terlalu Kering";
+      else                                 alasan = "DHT22 Error";
+    }
+
+    // ===================================================
+    // 4. PRINT SUMMARY DATA KE SERIAL MONITOR
+    // ===================================================
+    Serial.println("----------- SNAPSHOT DATA SENSOR -----------");
+    
+    if (dhtError) Serial.println("Suhu       : ERROR | Kelembapan: ERROR");
+    else {
+      Serial.print("Suhu       : "); Serial.print(t, 1); Serial.println(" C");
+      Serial.print("Kelembapan : "); Serial.print(h, 1); Serial.println(" %");
+    }
+    
+    Serial.print("Cahaya     : "); 
+    if (!bh1750Ready) Serial.println("No Sensor"); 
+    else { Serial.print((int)lux); Serial.println(" lx"); }
+    
+    Serial.print("Kebisingan : "); Serial.print(isBerisik ? "BISING" : "TENANG"); 
+    Serial.print(" (Selisih: "); Serial.print(kenyaringanSuara); Serial.println(")");
+    
+    Serial.println("\n[HASIL EVALUASI SISTEM]");
+    Serial.print("Total Skor : "); Serial.print(totalSkor); Serial.println(" / 100");
+    Serial.print("Status     : "); Serial.println(statusKenyamanan);
+    if (statusKenyamanan == "RUANGAN TIDAK NYAMAN!") {
+      Serial.print("Alasan     : "); Serial.println(alasan);
+    }
+    Serial.println("--------------------------------------------\n");
+  }
+}
