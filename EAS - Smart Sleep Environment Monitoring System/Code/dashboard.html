@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Monitoring Kamar Tidur</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta http-equiv="refresh" content="5">
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen p-6">
+
+    <div class="max-w-6xl mx-auto space-y-6">
+        <div class="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-md">
+            <h1 class="text-xl font-bold tracking-wide text-emerald-400">🌙 SLEEP ENVIRONMENT MONITOR</h1>
+            <span class="px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs rounded-full font-mono animate-pulse">LIVE (5s)</span>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-slate-400 text-xs font-semibold uppercase">Suhu</p>
+                <p class="text-3xl font-bold text-amber-400 mt-1">{{ kpi.suhu }}</p>
+            </div>
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-slate-400 text-xs font-semibold uppercase">Kelembapan</p>
+                <p class="text-3xl font-bold text-cyan-400 mt-1">{{ kpi.kelembapan }}</p>
+            </div>
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-slate-400 text-xs font-semibold uppercase">Intensitas Cahaya</p>
+                <p class="text-3xl font-bold text-yellow-400 mt-1">{{ kpi.cahaya }}</p>
+            </div>
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-slate-400 text-xs font-semibold uppercase">Kondisi Suara</p>
+                <p class="text-3xl font-bold mt-1 {% if kpi.suara == 'BISING' %}text-rose-500{% else %}text-emerald-400{% endif %}">
+                    {{ kpi.suara }}
+                </p>
+            </div>
+        </div>
+
+        <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 text-center shadow-lg">
+            <p class="text-xs text-slate-400 font-semibold uppercase mb-1">Evaluasi Kenyamanan Ruangan</p>
+            <h2 class="text-2xl font-black tracking-wide 
+                {% if 'SANGAT' in kpi.status %}text-emerald-400
+                {% elif 'CUKUP' in kpi.status %}text-amber-400
+                {% else %}text-rose-500{% endif %}">
+                {{ kpi.status }}
+            </h2>
+            <p class="text-xs text-slate-500 mt-1">Skor Lingkungan: <span class="font-bold text-slate-300">{{ kpi.skor }}/100</span></p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 h-64">
+                <canvas id="chartSuhu"></canvas>
+            </div>
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 h-64">
+                <canvas id="chartKelembapan"></canvas>
+            </div>
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 h-64">
+                <canvas id="chartCahaya"></canvas>
+            </div>
+            <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 h-64">
+                <canvas id="chartSuara"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Parsing data aman dari Flask Jinja2
+        const labels = JSON.parse('{{ grafik.timestamps | tojson | safe }}');
+        const dataSuhu = JSON.parse('{{ grafik.suhu | tojson | safe }}');
+        const dataKelembapan = JSON.parse('{{ grafik.kelembapan | tojson | safe }}');
+        const dataCahaya = JSON.parse('{{ grafik.cahaya | tojson | safe }}');
+        const dataSuara = JSON.parse('{{ grafik.suara | tojson | safe }}');
+
+        const optBase = {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
+            scales: { x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } }, y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } } }
+        };
+
+        // 1. Chart Suhu (Line)
+        new Chart(document.getElementById('chartSuhu'), {
+            type: 'line',
+            data: { labels: labels, datasets: [{ label: 'Suhu (°C)', data: dataSuhu, borderColor: '#fbbf24', tension: 0.2, pointRadius: 2 }] },
+            options: optBase
+        });
+
+        // 2. Chart Kelembapan (Line)
+        new Chart(document.getElementById('chartKelembapan'), {
+            type: 'line',
+            data: { labels: labels, datasets: [{ label: 'Kelembapan (%)', data: dataKelembapan, borderColor: '#22d3ee', tension: 0.2, pointRadius: 2 }] },
+            options: optBase
+        });
+
+        // 3. Chart Cahaya (Line)
+        new Chart(document.getElementById('chartCahaya'), {
+            type: 'line',
+            data: { labels: labels, datasets: [{ label: 'Cahaya (Lux)', data: dataCahaya, borderColor: '#facc15', tension: 0.2, pointRadius: 2 }] },
+            options: optBase
+        });
+
+        // 4. Chart Suara (Bar Plot)
+        new Chart(document.getElementById('chartSuara'), {
+            type: 'bar',
+            data: { labels: labels, datasets: [{ label: 'Kebisingan (1=Bising, 0=Tenang)', data: dataSuara, backgroundColor: '#f43f5e' }] },
+            options: {
+                ...optBase,
+                scales: {
+                    x: optBase.scales.x,
+                    y: { ...optBase.scales.y, min: 0, max: 1, ticks: { stepSize: 1, color: '#64748b' } }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
